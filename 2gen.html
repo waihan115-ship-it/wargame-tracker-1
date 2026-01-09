@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>SK AIRSOFT TRACKER GEN1</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+<style>
+body {
+    background:#0a0e14;
+    color:#fff;
+    font-family:Arial;
+    margin:0;
+    display:flex;
+    flex-direction:column;
+    min-height:100vh;
+}
+header {
+    background:#111827;
+    padding:14px;
+    font-size:20px;
+    font-weight:bold;
+    text-align:center;
+}
+main {
+    flex:1;
+    padding:10px 20px;
+}
+.status {
+    margin-top:20px;
+    font-size:30px;
+    font-weight:bold;
+    text-align:center;
+}
+.alive { color:#2ecc71; }
+.dead { color:#e74c3c; }
+.ready { color:#f1c40f; }
+
+.timer {
+    font-size:64px;
+    margin:10px 0;
+    text-align:center;
+}
+
+.panel {
+    background:#111827;
+    margin:10px 0;
+    padding:16px;
+    border-radius:14px;
+    text-align:center;
+}
+
+#kills, #deaths {
+    font-size:48px;
+    margin-top:10px;
+}
+
+/* 固定操作区 */
+.footer {
+    display:flex;
+    flex-direction:column;
+    padding:10px;
+    background:#111827;
+}
+button, input {
+    width:100%;
+    padding:14px;
+    margin:5px 0;
+    font-size:18px;
+    border-radius:10px;
+    border:none;
+}
+.kill { background:#1abc9c; }
+.death { background:#c0392b; }
+.revive { background:#f1c40f; color:#000; }
+.reset { background:#374151; color:#fff; }
+button:disabled {
+    background:#555;
+    color:#999;
+}
+</style>
+</head>
+
+<body>
+
+<header>SK AIRSOFT TRACKER GEN1
+</header>
+
+<main>
+    <div class="panel">
+        <label>复活时间（秒）</label><br>
+        <input type="number" id="respawnInput" value="10" min="1">
+    </div>
+
+    <div id="status" class="status alive">存活中</div>
+    <div id="timer" class="timer">--</div>
+
+    <div class="panel">
+        <div>击杀数</div>
+        <div id="kills">0</div>
+        <div>阵亡次数</div>
+        <div id="deaths">0</div>
+    </div>
+</main>
+
+<div class="footer">
+    <button class="kill" id="killBtn" onclick="addKill()">击杀 +1</button>
+    <button class="death" id="deathBtn" onclick="die()">阵亡</button>
+    <button class="revive" id="reviveBtn" onclick="revive()" disabled>确认复活</button>
+    <button class="reset" onclick="resetGame()">重置比赛</button>
+</div>
+
+<script>
+/* ===== Firebase 配置（换成你自己的） ===== */
+const firebaseConfig = {
+  apiKey: "你的_API_KEY",
+  authDomain: "你的项目.firebaseapp.com",
+  databaseURL: "https://你的项目.firebaseio.com",
+  projectId: "你的项目ID"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+/* ===== 玩家ID ===== */
+const playerId = "player1";
+const playerRef = db.ref("players/" + playerId);
+
+/* ===== 操作 ===== */
+function addKill() {
+    playerRef.transaction(data => {
+        if (!data || data.status === "alive") {
+            if (!data) data = {};
+            data.kills = (data.kills || 0) + 1;
+            return data;
+        }
+        return data; // 阵亡时禁止加击杀
+    });
+}
+
+function die() {
+    const respawnTime = parseInt(document.getElementById("respawnInput").value) || 10;
+
+    playerRef.transaction(data => {
+        if (!data) data = {};
+        if (data.status === "dead") return data; // 已阵亡不重复触发
+        data.status = "dead";
+        data.deaths = (data.deaths || 0) + 1;
+        data.respawnTime = respawnTime;
+        data.deathTime = Date.now();
+        return data;
+    });
+}
+
+/* ===== 确认复活 ===== */
+function revive() {
+    playerRef.update({
+        status: "alive"
+    });
+}
+
+/* ===== 实时监听 ===== */
+let localTimer = null;
+
+playerRef.on("value", snap => {
+    const data = snap.val();
+    if (!data) return;
+
+    document.getElementById("kills").textContent = data.kills || 0;
+    document.getElementById("deaths").textContent = data.deaths || 0;
+
+    clearInterval(localTimer);
+
+    if (data.status === "dead") {
+        document.getElementById("status").textContent = "阵亡";
+        document.getElementById("status").className = "status dead";
+        document.getElementById("killBtn").disabled = true;
+        document.getElementById("deathBtn").disabled = true;
+        document.getElementById("reviveBtn").disabled = true;
+
+        localTimer = setInterval(() => {
+            const elapsed = Math.floor((Date.now() - data.deathTime) / 1000);
+            const remain = data.respawnTime - elapsed;
+
+            if (remain > 0) {
+                document.getElementById("timer").textContent = remain;
+            } else {
+                document.getElementById("timer").textContent = "READY";
+                document.getElementById("reviveBtn").disabled = false; // 可手动复活
+                clearInterval(localTimer);
+            }
+        }, 1000);
+
+    } else {
+        document.getElementById("status").textContent = "存活中";
+        document.getElementById("status").className = "status alive";
+        document.getElementById("timer").textContent = "--";
+        document.getElementById("killBtn").disabled = false;
+        document.getElementById("deathBtn").disabled = false;
+        document.getElementById("reviveBtn").disabled = true;
+    }
+});
+
+/* ===== 重置比赛 ===== */
+function resetGame() {
+    clearInterval(localTimer);
+    playerRef.set({
+        kills: 0,
+        deaths: 0,
+        status: "alive"
+    });
+}
+</script>
+
+</body>
+</html>
